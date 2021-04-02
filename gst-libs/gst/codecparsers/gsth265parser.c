@@ -75,6 +75,7 @@
 #ifndef GST_DISABLE_GST_DEBUG
 #define GST_CAT_DEFAULT gst_h265_debug_category_get()
 static GstDebugCategory *
+
 gst_h265_debug_category_get (void)
 {
   static gsize cat_gonce = 0;
@@ -1340,6 +1341,133 @@ error:
   return GST_H265_PARSER_ERROR;
 }
 
+static GstH265ParserResult
+gst_h265_parser_parse_annotated_region(GstH265Parser * parser,
+    GstH265AnnotatedRegion * ar, NalReader * nr)
+{
+  guint i;
+  
+  GST_DEBUG ("parsing \"Annotated region\"");
+
+  READ_UINT8 (nr, ar->ar_cancel_flag, 1);
+
+  if (!ar->ar_cancel_flag)
+  {
+    READ_UINT8 (nr, ar->ar_not_optimized_for_viewing_flag, 1);
+    READ_UINT8 (nr, ar->ar_true_motion_flag, 1);
+    READ_UINT8 (nr, ar->ar_occluded_object_flag, 1);
+    READ_UINT8 (nr, ar->ar_partial_object_flag_present_flag, 1);
+    READ_UINT8 (nr, ar->ar_object_label_present_flag, 1);
+    READ_UINT8 (nr, ar->ar_object_confidence_info_present_flag, 1);
+
+    if (ar->ar_object_confidence_info_present_flag)
+      READ_UINT8 (nr, ar->ar_object_confidence_length_minus1, 4);
+
+    if (ar->ar_object_label_present_flag)
+    {
+      READ_UINT8 (nr, ar->ar_object_label_language_present_flag, 1);
+      if (ar->ar_object_label_language_present_flag)
+      {
+        while (!nal_reader_is_byte_aligned (nr))
+          READ_UINT8 (nr, ar->ar_bit_equal_to_zero, 1);
+          
+        /* read ar_object_label_language*/
+        READ_ST (nr, ar->ar_object_label_language);
+        // GST_ERROR ("Label language is %s", &ar->ar_object_label_language);
+      }
+
+      READ_UE (nr, ar->ar_num_label_updates);
+
+      for (i=0; i < ar->ar_num_label_updates; i++)
+      {
+        READ_UE (nr, ar->ar_label_idx[i]);
+        READ_UINT8 (nr, ar->ar_label_cancel_flag, 1);
+
+        if (!ar->ar_label_cancel_flag)
+        {
+          while (!nal_reader_is_byte_aligned (nr))
+            READ_UINT8 (nr, ar->ar_bit_equal_to_zero, 1);
+
+          /* read the ar_label */
+          READ_ST (nr, ar->ar_label[ar->ar_label_idx[i]]);
+        }
+      }
+    } 
+
+    READ_UE (nr, ar->ar_num_object_updates);
+
+    /* for debug info display */
+    if (ar->ar_num_object_updates > 0)
+    {
+      GST_ERROR ("THE number of updated labels ==> %d", ar->ar_num_label_updates);
+      GST_ERROR ("THE number Of updated objects ==> %d", ar->ar_num_object_updates);
+    }
+    /* ************************************ */
+
+    for (i=0; i < ar->ar_num_object_updates; i++)
+    { 
+      READ_UE (nr, ar->ar_object_idx[i]);
+      READ_UINT8 (nr, ar->ar_object_cancel_flag, 1);
+      if (ar->ar_num_object_updates > 0)
+      {
+        GST_ERROR ("THE %d updated object_idx ==> %d, cancel flag ==> %d", i, 
+        ar->ar_object_idx[i], ar->ar_object_cancel_flag);
+      }
+   
+      if (!ar->ar_object_cancel_flag)
+      {
+        if (ar->ar_object_label_present_flag)
+        {
+          READ_UINT8 (nr, ar->ar_object_label_update_flag, 1);
+          // GST_ERROR ("label_update flag: %d",  ar->ar_object_label_update_flag);
+          if (ar->ar_object_label_update_flag)
+            READ_UE (nr, ar->ar_object_label_idx[ar->ar_object_idx[i]]);
+        }
+
+        READ_UINT8 (nr, ar->ar_bounding_box_update_flag, 1);
+        // GST_ERROR ("bbox_update flag: %d", ar->ar_bounding_box_update_flag);
+        if (ar->ar_bounding_box_update_flag)
+        {
+          READ_UINT8 (nr, ar->ar_bounding_box_cancel_flag, 1);
+          // GST_ERROR ("bbox cancel flag: %d", ar->ar_bounding_box_cancel_flag);
+          if (!ar->ar_bounding_box_cancel_flag)
+          {   
+
+            READ_UINT16 (nr, ar->ar_bounding_box_top[ar->ar_object_idx[i]], 16);
+            READ_UINT16 (nr, ar->ar_bounding_box_left[ar->ar_object_idx[i]], 16);
+            READ_UINT16 (nr, ar->ar_bounding_box_width[ar->ar_object_idx[i]], 16);
+            READ_UINT16 (nr, ar->ar_bounding_box_height[ar->ar_object_idx[i]], 16);
+
+            /* debug info display using GST_ERROR */
+            if (ar->ar_num_object_updates > 0)
+            {
+              GST_ERROR ("BBOX %d ==> top:%d, left:%d, width:%d, height:%d", i, ar->ar_bounding_box_top[ar->ar_object_idx[i]],
+              ar->ar_bounding_box_left[ar->ar_object_idx[i]], ar->ar_bounding_box_width[ar->ar_object_idx[i]],
+              ar->ar_bounding_box_height[ar->ar_object_idx[i]]); 
+              //GST_ERROR ("Partial present flag is %d, Confidence present flag is %d",
+              //ar->ar_partial_object_flag_present_flag,ar->ar_object_confidence_info_present_flag);
+            }
+            /* ************************************ */ 
+            
+            if (ar->ar_partial_object_flag_present_flag)
+              READ_UINT8 (nr, ar->ar_partial_object_flag[ar->ar_object_idx[i]], 1);
+
+            if (ar->ar_object_confidence_info_present_flag)
+              READ_UINT8 (nr, ar->ar_object_confidence[ar->ar_object_idx[i]], 
+              ar->ar_object_confidence_length_minus1+1);
+          }
+        }
+      }
+    }
+
+  }
+  return GST_H265_PARSER_OK;
+
+error:
+  GST_WARNING("error parsing \"Anotated region\"");
+  return GST_H265_PARSER_ERROR;
+}
+
 /******** API *************/
 
 /**
@@ -1531,14 +1659,6 @@ gst_h265_parser_identify_nalu_hevc (GstH265Parser * parser,
 
   memset (nalu, 0, sizeof (*nalu));
 
-  /* Would overflow guint below otherwise: the callers needs to ensure that
-   * this never happens */
-  if (offset > G_MAXUINT32 - nal_length_size) {
-    GST_WARNING ("offset + nal_length_size overflow");
-    nalu->size = 0;
-    return GST_H265_PARSER_BROKEN_DATA;
-  }
-
   if (size < offset + nal_length_size) {
     GST_DEBUG ("Can't parse, buffer has too small size %" G_GSIZE_FORMAT
         ", offset %u", size, offset);
@@ -1553,13 +1673,7 @@ gst_h265_parser_identify_nalu_hevc (GstH265Parser * parser,
   nalu->sc_offset = offset;
   nalu->offset = offset + nal_length_size;
 
-  if (nalu->size > G_MAXUINT32 - nal_length_size) {
-    GST_WARNING ("NALU size + nal_length_size overflow");
-    nalu->size = 0;
-    return GST_H265_PARSER_BROKEN_DATA;
-  }
-
-  if (size < (gsize) nalu->size + nal_length_size) {
+  if (size < nalu->size + nal_length_size) {
     nalu->size = 0;
 
     return GST_H265_PARSER_NO_NAL_END;
@@ -2803,6 +2917,12 @@ gst_h265_parser_parse_sei_message (GstH265Parser * parser,
         res = gst_h265_parser_parse_content_light_level_info (parser,
             &sei->payload.content_light_level, nr);
         break;
+      
+      case GST_H265_SEI_ANNOTATED_REGION:
+        res = gst_h265_parser_parse_annotated_region(parser,
+            &sei->payload.annotated_region, nr);
+        break;
+      
       default:
         /* Just consume payloadSize bytes, which does not account for
            emulation prevention bytes */
@@ -2996,6 +3116,7 @@ gst_h265_parser_parse_sei (GstH265Parser * nalparser, GstH265NalUnit * nalu,
   NalReader nr;
   GstH265SEIMessage sei;
   GstH265ParserResult res;
+  //frame_no++ ;
 
   GST_DEBUG ("parsing SEI nal");
   nal_reader_init (&nr, nalu->data + nalu->offset + nalu->header_bytes,

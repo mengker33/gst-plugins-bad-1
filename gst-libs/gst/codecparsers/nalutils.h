@@ -110,6 +110,9 @@ gboolean nal_reader_get_ue (NalReader * nr, guint32 * val);
 G_GNUC_INTERNAL
 gboolean nal_reader_get_se (NalReader * nr, gint32 * val);
 
+G_GNUC_INTERNAL
+gboolean nal_reader_get_st (NalReader * nr, gchar * val);
+
 #define CHECK_ALLOWED_MAX_WITH_DEBUG(dbg, val, max) { \
   if (val > max) { \
     GST_WARNING ("value for '" dbg "' greater than max. value: %d, max %d", \
@@ -191,6 +194,15 @@ gboolean nal_reader_get_se (NalReader * nr, gint32 * val);
   READ_SE (nr, tmp); \
   CHECK_ALLOWED_WITH_DEBUG (G_STRINGIFY (val), tmp, min, max); \
   val = tmp; \
+}
+
+
+#define READ_ST(nr, val) { \
+  if (!nal_reader_get_st (nr, &val)) { \
+    GST_ERROR ("Reading ST..."); \
+    GST_WARNING ("failed to read ST for '" G_STRINGIFY (val) "'"); \
+    goto error; \
+  } \
 }
 
 G_GNUC_INTERNAL

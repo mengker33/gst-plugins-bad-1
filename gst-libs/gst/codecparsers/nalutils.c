@@ -181,9 +181,11 @@ nal_reader_get_bits_uint##bits (NalReader *nr, guint##bits *val, guint nbits) \
     *val &= ((guint##bits)1 << nbits) - 1; \
   \
   nr->bits_in_cache = shift; \
-  \
+  /* if (nbits == 16) \ 
+    GST_ERROR("16bits is %ld", *val);
+  */ \
   return TRUE; \
-} \
+} 
 
 NAL_READER_READ_BITS (8);
 NAL_READER_READ_BITS (16);
@@ -245,10 +247,30 @@ nal_reader_get_se (NalReader * nr, gint32 * val)
 }
 
 gboolean
+nal_reader_get_st (NalReader * nr, gchar * val)
+{
+  guint8 tmp = 1;
+  char * s = val;
+  while (tmp)
+  {
+    nal_reader_get_bits_uint8 (nr, &tmp, 8);
+    // GST_ERROR ("READ tmp is %d", tmp);
+    *val= (char) tmp;
+    val++;
+  }
+  // GST_ERROR("TEXT info is %s", s);
+  return TRUE;
+}
+
+gboolean
 nal_reader_is_byte_aligned (NalReader * nr)
 {
   if (nr->bits_in_cache != 0)
+  {
+    // GST_ERROR("bits_in_cache is %d", nr->bits_in_cache);
     return FALSE;
+  }
+    
   return TRUE;
 }
 
