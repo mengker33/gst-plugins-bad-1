@@ -41,6 +41,12 @@
 #include "gstmsdksystemmemory.h"
 #include "gstmsdkcontextutil.h"
 
+#include <gst/videoparsers/gsth265parse.h>
+// #include <gst/videoparsers/gsth265parse.c>
+#include <gst-libs/gst/codecparsers/gsth265parser.h>
+//#include <gst-libs/gst/codecparsers/gsth265parser.c>
+#include <gst-libs/gst/codecparsers/nalutils.h>
+
 GST_DEBUG_CATEGORY_EXTERN (gst_msdkdec_debug);
 #define GST_CAT_DEFAULT gst_msdkdec_debug
 
@@ -63,6 +69,9 @@ static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
 #define gst_msdkdec_parent_class parent_class
 G_DEFINE_TYPE (GstMsdkDec, gst_msdkdec, GST_TYPE_VIDEO_DECODER);
 
+guint workCount = 0;
+guint outCount = 0;
+
 typedef struct _MsdkSurface
 {
   mfxFrameSurface1 *surface;
@@ -78,6 +87,44 @@ struct _MsdkDecTask
 
   gboolean decode_only;
 };
+
+typedef struct _GstMetaAnnotatedRegion
+{
+  GstMeta meta;
+  
+  guint8 num_objects;
+  guint8 label_idx[256];
+  guint8 object_idx[256];
+  gchar *label[256];
+  guint16 bounding_box[256][4];
+  
+}GstMetaAnnotatedRegion;
+
+static void
+sei_to_meta (GstH265AnnotatedRegion *ar, GstMetaAnnotatedRegion *mar)
+{
+  guint i;
+  guint j;
+
+  GST_DEBUG ("writing SEI message to metadata");
+
+  mar->num_objects = sizeof(ar->ar_label);
+
+  for (i=0; i < mar->num_objects; i++)
+  {
+    mar->label_idx[i] = ar->ar_label_idx[i];
+    mar->object_idx[i] = ar->ar_object_idx[i];
+    mar->label[mar->label_idx[i]] = ar->ar_label[ar->ar_label_idx[i]];
+
+    /* write bbox top, left, width and height in an array together */
+    mar->bounding_box[i][0] = ar->ar_bounding_box_top[ar->ar_object_idx[i]];
+    mar->bounding_box[i][1] = ar->ar_bounding_box_left[ar->ar_object_idx[i]];
+    mar->bounding_box[i][2] = ar->ar_bounding_box_width[ar->ar_object_idx[i]];
+    mar->bounding_box[i][3] = ar->ar_bounding_box_height[ar->ar_object_idx[i]];
+
+  }
+}
+
 
 static gboolean gst_msdkdec_drain (GstVideoDecoder * decoder);
 static gboolean gst_msdkdec_flush (GstVideoDecoder * decoder);
@@ -432,6 +479,7 @@ gst_msdkdec_init_decoder (GstMsdkDec * thiz)
       request.NumFrameMin, request.NumFrameSuggested);
 
   status = MFXVideoDECODE_Init (session, &thiz->param);
+  // GST_ERROR ("Initializing Decoder...");
   if (status < MFX_ERR_NONE) {
     GST_ERROR_OBJECT (thiz, "Init failed (%s)", msdk_status_to_string (status));
     goto failed;
@@ -441,6 +489,7 @@ gst_msdkdec_init_decoder (GstMsdkDec * thiz)
   }
 
   status = MFXVideoDECODE_GetVideoParam (session, &thiz->param);
+  // GST_ERROR ("Get params for Decoder...");
   if (status < MFX_ERR_NONE) {
     GST_ERROR_OBJECT (thiz, "Get Video Parameters failed (%s)",
         msdk_status_to_string (status));
@@ -994,6 +1043,16 @@ gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
   gboolean hard_reset = FALSE;
   GstClockTime pts = GST_CLOCK_TIME_NONE;
 
+  /* define elements for mfxPayload */
+  mfxU64 ts;
+  mfxPayload payload;
+  payload.Data = malloc(128);
+  payload.NumBit = 1;
+  payload.BufSize = 128;
+  mfxStatus payload_status;
+ 
+  // GST_ERROR ("Frame offset ==> % d", frame->input_buffer->offset);
+
   /* configure the subclass in order to fill the CodecID field of
    * mfxVideoParam and also to load the PluginID for some of the
    * codecs which is mandatory to invoke the
@@ -1027,6 +1086,7 @@ gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
    * Instead of copying the input data into the mfxBitstream, let's
    * keep an extra reference to frame-codec's input buffer */
   input_buffer = gst_buffer_ref (frame->input_buffer);
+  GST_ERROR ("Decoding frame %d", frame->decode_frame_number);
   if (!gst_buffer_map (input_buffer, &map_info, GST_MAP_READ)) {
     gst_buffer_unref (input_buffer);
     return GST_FLOW_ERROR;
@@ -1042,6 +1102,7 @@ gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
     bitstream.DataLength = map_info.size;
     bitstream.MaxLength = map_info.size;
     bitstream.TimeStamp = GST_TO_MFX_TIME (pts);
+    // GST_ERROR ("Bitsream length is %ld", map_info.size);
 
     /*
      * MFX_BITSTREAM_COMPLETE_FRAME was removed since commit df59db9, however
@@ -1051,6 +1112,7 @@ gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
      */
     if (thiz->param.mfx.DecodedOrder == GST_MSDKDEC_OUTPUT_ORDER_DECODE)
       bitstream.DataFlag |= MFX_BITSTREAM_COMPLETE_FRAME;
+      
   } else {
     /* Non packetized streams: eg: vc1 advanced profile with per buffer bdu */
     gst_adapter_push (thiz->adapter, gst_buffer_ref (input_buffer));
@@ -1127,6 +1189,7 @@ gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
    * gst_msdkdec_finish_task is fetching the frames itself.  */
   gst_video_codec_frame_unref (frame);
   frame = NULL;
+  guint payload_size;
   for (;;) {
     task = &g_array_index (thiz->tasks, MsdkDecTask, thiz->next_task);
     flow = gst_msdkdec_finish_task (thiz, task);
@@ -1163,11 +1226,26 @@ gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
         }
       }
     }
-
+    bitstream.DataFlag = MFX_BITSTREAM_COMPLETE_FRAME;
+    // bitstream.TimeStamp = workCount++;
+    
     status =
         MFXVideoDECODE_DecodeFrameAsync (session, &bitstream, surface->surface,
         &out_surface, &task->sync_point);
+    
+    while (payload.NumBit > 0)
+    {
+      payload_status = MFXVideoDECODE_GetPayload(session, &ts, &payload);
+      if (payload.NumBit > 0)
+        payload_size = payload.NumBit;
+      GST_ERROR ("GetPayload NumBits => %d, type => %d", payload.NumBit, payload.Type);
+    }
 
+    /*add trailing byte at the end of data buffer which is necessary for parsing */
+    guint8 trailing_byte = 0x80;
+    memcpy (payload.Data + payload_size/8, &trailing_byte, sizeof(trailing_byte));
+    payload_size +=8;
+    
     if (!find_msdk_surface (thiz, task, out_surface)) {
       flow = GST_FLOW_ERROR;
       goto done;
@@ -1205,13 +1283,13 @@ gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
     if (G_LIKELY (status == MFX_ERR_NONE)
         || (status == MFX_WRN_VIDEO_PARAM_CHANGED)) {
       thiz->next_task = (thiz->next_task + 1) % thiz->tasks->len;
-
+      
       if (surface->surface->Data.Locked > 0)
         surface = NULL;
-
+      
       if (bitstream.DataLength == 0) {
         flow = GST_FLOW_OK;
-
+      
         /* Don't release it if the current surface is in use */
         if (surface && task->surface->surface == surface->surface)
           surface = NULL;
@@ -1222,7 +1300,10 @@ gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
       if (task->surface) {
         task->decode_only = TRUE;
         thiz->next_task = (thiz->next_task + 1) % thiz->tasks->len;
+        //  ("Next task is %d", thiz->next_task);
       }
+       // GST_ERROR ("coded timestamp is %lln, output timestamp is %lln", 
+       // surface->surface->Data.TimeStamp, &out_surface->Data.TimeStamp);
 
       if (surface->surface->Data.Locked > 0)
         surface = NULL;
@@ -1249,7 +1330,35 @@ gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
       break;
     }
   }
+  
+  GstH265ParserResult res;
+  GstH265Parser *parser;
+  GArray *messages;
+    
+  GstH265NalUnit nalu;
+  nalu.size = payload_size / 8;
+  nalu.data = payload.Data;
+  nalu.offset = 0;
+  nalu.header_bytes = 0;
 
+  /* Set NAL Unit type according to payload CtrlFlags, CtrlFlags=0 
+   * refers to PREFIX_SEI_NUT=39, CtrlFlags=1 refers to SUFFIX_SEI_NUT=40 
+   */
+  
+  if (payload.CtrlFlags == 0)
+    nalu.type = 39;
+  else
+    nalu.type = 40;
+  
+  /* manually add trailing byte at the end of payload stream */
+  GST_ERROR ("nalu size => %d", nalu.size);
+  
+  
+  res = gst_h265_parser_parse_sei (parser, &nalu, &messages);
+  // res = gst_h265_parser_parse_sei_message (parser, 39, &nr, &sei);
+  GST_ERROR ("Parsing result is %d", res);
+  GST_ERROR ("-----------------------------------------");
+  
   if (!gst_video_decoder_get_packetized (decoder)) {
     /* flush out the data which has already been consumed by msdk */
     gst_adapter_flush (thiz->adapter, bitstream.DataOffset);
@@ -1277,6 +1386,34 @@ error:
     gst_video_decoder_drop_frame (decoder, frame);
 
   return flow;
+}
+
+/* new added func to parse the SEI from the payload */
+static GstH265ParserResult
+parse_payload(mfxPayload *payload, guint payload_size)
+{
+  GstH265ParserResult res;
+  GstH265Parser *parser;
+  GArray *messages;
+
+  GstH265NalUnit nalu;
+  nalu.data = payload->Data;
+  nalu.size = payload_size;
+  nalu.offset = 0;
+  nalu.header_bytes = 0;
+  /* Set NAL Unit type according to payload CtrlFlags, CtrlFlags=0 
+   * refers to PREFIX_SEI_NUT=39, CtrlFlags=1 refers to SUFFIX_SEI_NUT=40 
+   */
+  
+  if (payload->CtrlFlags == 0)
+    nalu.type = 39;
+  else
+    nalu.type = 40;
+  
+  res = gst_h265_parser_parse_sei (parser, &nalu, &messages);
+  // res = gst_h265_parser_parse_sei_message (parser, 39, &nr, &sei);
+  GST_ERROR ("Parsing result is %d", res);
+  return res;
 }
 
 static GstFlowReturn
@@ -1536,11 +1673,12 @@ gst_msdkdec_drain (GstVideoDecoder * decoder)
   mfxSession session;
   mfxStatus status;
   guint i;
+  
 
   if (!thiz->initialized)
     return GST_FLOW_OK;
   session = gst_msdk_context_get_session (thiz->context);
-
+  GST_ERROR ("msdkDEC drain...");
   for (;;) {
     task = &g_array_index (thiz->tasks, MsdkDecTask, thiz->next_task);
     if ((flow = gst_msdkdec_finish_task (thiz, task)) != GST_FLOW_OK) {
@@ -1562,6 +1700,8 @@ gst_msdkdec_drain (GstVideoDecoder * decoder)
     status =
         MFXVideoDECODE_DecodeFrameAsync (session, NULL, surface->surface,
         &out_surface, &task->sync_point);
+
+    // sei_status = MFXVideoDECODE_GetPayload(session, mfxU64 *ts, mfxPayload *payload);
 
     if (!find_msdk_surface (thiz, task, out_surface)) {
       return GST_FLOW_ERROR;
