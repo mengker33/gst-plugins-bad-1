@@ -558,6 +558,7 @@ gst_h265_parse_process_sei (GstH265Parse * h265parse, GstH265NalUnit * nalu)
    */
   for (i = 0; i < messages->len; i++) {
     sei = g_array_index (messages, GstH265SEIMessage, i);
+    // GST_ERROR("SEI type is %d", sei.payloadType);
     switch (sei.payloadType) {
       case GST_H265_SEI_RECOVERY_POINT:
         GST_LOG_OBJECT (h265parse, "recovery point found: %u %u %u",
@@ -665,8 +666,40 @@ gst_h265_parse_process_sei (GstH265Parse * h265parse, GstH265NalUnit * nalu)
 
         break;
       }
+      case GST_H265_SEI_ANNOTATED_REGION:
+      {
+        //memcpy (&h265parse->annotated_region, &sei.payload.annotated_region,
+            //sizeof (GstH265AnnotatedRegion));
+        h265parse->annotated_region = sei.payload.annotated_region;
+        /*
+        GstVideoRegionOfInterestMeta *roi;
+        guint obj_num;
+        guint i;
+
+        obj_num = sei.payload.annotated_region.ar_num_object_updates;
+
+        // object update 
+        /*
+        for (i=0; i < obj_num; i++)
+        {
+          roi.id = sei.payload.annotated_region.ar_object_idx[i];
+          roi.roi_type = g_quark_from_string (sei.payload.annotated_region.
+          ar_label[ar->ar_object_label_idx[ar->ar_object_idx[i]]]);
+
+          roi.x = sei.payload.annotated_region.ar_bounding_box_left[roi.id];
+          roi.y = sei.payload.annotated_region.ar_bounding_box_top[roi.id];
+          roi.w = sei.payload.annotated_region.ar_bounding_box_width[roi.id];
+          roi.h = sei.payload.annotated_region.ar_bounding_box_height[roi.id];
+        }
+        */
+       break;
+      }
+
       default:
+      {
+        //GST_ERROR("TYPE IS 202, NOT FOUND....");
         break;
+      }
     }
   }
   g_array_free (messages, TRUE);
@@ -724,7 +757,7 @@ gst_h265_parse_process_nal (GstH265Parse * h265parse, GstH265NalUnit * nalu)
 
   /* we have a peek as well */
   nal_type = nalu->type;
-
+  
   GST_DEBUG_OBJECT (h265parse, "processing nal of type %u %s, size %u",
       nal_type, _nal_name (nal_type), nalu->size);
   switch (nal_type) {
@@ -1035,7 +1068,7 @@ gst_h265_parse_handle_frame_packetized (GstBaseParse * parse,
   const guint nl = h265parse->nal_length_size;
   GstMapInfo map;
   gint left;
-
+  GST_ERROR("Length of NAL: %d", nl);
   if (nl < 1 || nl > 4) {
     GST_DEBUG_OBJECT (h265parse, "insufficient data to split input");
     return GST_FLOW_NOT_NEGOTIATED;
