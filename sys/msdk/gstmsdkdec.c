@@ -40,12 +40,7 @@
 #include "gstmsdkvideomemory.h"
 #include "gstmsdksystemmemory.h"
 #include "gstmsdkcontextutil.h"
-
 #include <gst/videoparsers/gsth265parse.h>
-// #include <gst/videoparsers/gsth265parse.c>
-#include <gst-libs/gst/codecparsers/gsth265parser.h>
-//#include <gst-libs/gst/codecparsers/gsth265parser.c>
-#include <gst-libs/gst/codecparsers/nalutils.h>
 
 GST_DEBUG_CATEGORY_EXTERN (gst_msdkdec_debug);
 #define GST_CAT_DEFAULT gst_msdkdec_debug
@@ -1023,6 +1018,33 @@ find_msdk_surface (GstMsdkDec * thiz, MsdkDecTask * task,
   return TRUE;
 }
 
+static void
+parse_payload(mfxPayload * payload, guint size)
+{
+  
+  GstH265ParserResult res;
+  GstH265Parser *parser;
+  GArray *messages;
+
+  GstH265NalUnit nalu;
+  nalu.data = payload->Data;
+  nalu.size = size / 8;
+  nalu.offset = 0;
+  nalu.header_bytes = 0;
+
+  /* Set NAL Unit type according to payload CtrlFlags, CtrlFlags=0 
+   * refers to PREFIX_SEI_NUT=39, CtrlFlags=1 refers to SUFFIX_SEI_NUT=40 
+   */
+  if (payload->CtrlFlags == 0)
+    nalu.type = 39;
+  else
+    nalu.type = 40;
+  
+  //gst_h265_parse_process_sei (h265parse, &nalu);
+
+  res = gst_h265_parser_parse_sei (parser, &nalu, &messages);
+}
+
 static GstFlowReturn
 gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
 {
@@ -1051,7 +1073,6 @@ gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
   payload.BufSize = 128;
   mfxStatus payload_status;
  
-  // GST_ERROR ("Frame offset ==> % d", frame->input_buffer->offset);
 
   /* configure the subclass in order to fill the CodecID field of
    * mfxVideoParam and also to load the PluginID for some of the
@@ -1086,7 +1107,8 @@ gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
    * Instead of copying the input data into the mfxBitstream, let's
    * keep an extra reference to frame-codec's input buffer */
   input_buffer = gst_buffer_ref (frame->input_buffer);
-  GST_ERROR ("Decoding frame %d", frame->decode_frame_number);
+  GST_ERROR ("*********** Decoding frame %d ***********", frame->decode_frame_number);
+
   if (!gst_buffer_map (input_buffer, &map_info, GST_MAP_READ)) {
     gst_buffer_unref (input_buffer);
     return GST_FLOW_ERROR;
@@ -1102,7 +1124,6 @@ gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
     bitstream.DataLength = map_info.size;
     bitstream.MaxLength = map_info.size;
     bitstream.TimeStamp = GST_TO_MFX_TIME (pts);
-    // GST_ERROR ("Bitsream length is %ld", map_info.size);
 
     /*
      * MFX_BITSTREAM_COMPLETE_FRAME was removed since commit df59db9, however
@@ -1190,6 +1211,7 @@ gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
   gst_video_codec_frame_unref (frame);
   frame = NULL;
   guint payload_size;
+
   for (;;) {
     task = &g_array_index (thiz->tasks, MsdkDecTask, thiz->next_task);
     flow = gst_msdkdec_finish_task (thiz, task);
@@ -1244,7 +1266,7 @@ gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
     /*add trailing byte at the end of data buffer which is necessary for parsing */
     guint8 trailing_byte = 0x80;
     memcpy (payload.Data + payload_size/8, &trailing_byte, sizeof(trailing_byte));
-    payload_size +=8;
+    payload_size +=8; 
     
     if (!find_msdk_surface (thiz, task, out_surface)) {
       flow = GST_FLOW_ERROR;
@@ -1330,34 +1352,9 @@ gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
       break;
     }
   }
-  
-  GstH265ParserResult res;
-  GstH265Parser *parser;
-  GArray *messages;
-    
-  GstH265NalUnit nalu;
-  nalu.size = payload_size / 8;
-  nalu.data = payload.Data;
-  nalu.offset = 0;
-  nalu.header_bytes = 0;
-
-  /* Set NAL Unit type according to payload CtrlFlags, CtrlFlags=0 
-   * refers to PREFIX_SEI_NUT=39, CtrlFlags=1 refers to SUFFIX_SEI_NUT=40 
-   */
-  
-  if (payload.CtrlFlags == 0)
-    nalu.type = 39;
-  else
-    nalu.type = 40;
-  
-  /* manually add trailing byte at the end of payload stream */
-  GST_ERROR ("nalu size => %d", nalu.size);
-  
-  
-  res = gst_h265_parser_parse_sei (parser, &nalu, &messages);
-  // res = gst_h265_parser_parse_sei_message (parser, 39, &nr, &sei);
-  GST_ERROR ("Parsing result is %d", res);
-  GST_ERROR ("-----------------------------------------");
+ 
+  parse_payload (&payload, payload_size);
+  GST_ERROR ("--------------------------------------------------");
   
   if (!gst_video_decoder_get_packetized (decoder)) {
     /* flush out the data which has already been consumed by msdk */
@@ -1386,34 +1383,6 @@ error:
     gst_video_decoder_drop_frame (decoder, frame);
 
   return flow;
-}
-
-/* new added func to parse the SEI from the payload */
-static GstH265ParserResult
-parse_payload(mfxPayload *payload, guint payload_size)
-{
-  GstH265ParserResult res;
-  GstH265Parser *parser;
-  GArray *messages;
-
-  GstH265NalUnit nalu;
-  nalu.data = payload->Data;
-  nalu.size = payload_size;
-  nalu.offset = 0;
-  nalu.header_bytes = 0;
-  /* Set NAL Unit type according to payload CtrlFlags, CtrlFlags=0 
-   * refers to PREFIX_SEI_NUT=39, CtrlFlags=1 refers to SUFFIX_SEI_NUT=40 
-   */
-  
-  if (payload->CtrlFlags == 0)
-    nalu.type = 39;
-  else
-    nalu.type = 40;
-  
-  res = gst_h265_parser_parse_sei (parser, &nalu, &messages);
-  // res = gst_h265_parser_parse_sei_message (parser, 39, &nr, &sei);
-  GST_ERROR ("Parsing result is %d", res);
-  return res;
 }
 
 static GstFlowReturn
