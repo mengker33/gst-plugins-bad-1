@@ -24,6 +24,7 @@
 
 #include <gst/base/base.h>
 #include <gst/pbutils/pbutils.h>
+#include "gstvideoparserselements.h"
 #include "gsth265parse.h"
 
 #include <string.h>
@@ -91,6 +92,9 @@ static GstStaticPadTemplate srctemplate = GST_STATIC_PAD_TEMPLATE ("src",
 
 #define parent_class gst_h265_parse_parent_class
 G_DEFINE_TYPE (GstH265Parse, gst_h265_parse, GST_TYPE_BASE_PARSE);
+GST_ELEMENT_REGISTER_DEFINE_WITH_CODE (h265parse, "h265parse",
+    GST_RANK_SECONDARY, GST_TYPE_H265_PARSE,
+    videoparsers_element_init (plugin));
 
 static void gst_h265_parse_finalize (GObject * object);
 
@@ -120,7 +124,7 @@ gst_h265_parse_process_sei_user_data (GstH265Parse * h265parse,
 
 static void
 gst_h265_parse_class_init (GstH265ParseClass * klass)
-{
+{ 
   GObjectClass *gobject_class = (GObjectClass *) klass;
   GstBaseParseClass *parse_class = GST_BASE_PARSE_CLASS (klass);
   GstElementClass *gstelement_class = GST_ELEMENT_CLASS (klass);
@@ -558,7 +562,6 @@ gst_h265_parse_process_sei (GstH265Parse * h265parse, GstH265NalUnit * nalu)
    */
   for (i = 0; i < messages->len; i++) {
     sei = g_array_index (messages, GstH265SEIMessage, i);
-    // GST_ERROR("SEI type is %d", sei.payloadType);
     switch (sei.payloadType) {
       case GST_H265_SEI_RECOVERY_POINT:
         GST_LOG_OBJECT (h265parse, "recovery point found: %u %u %u",
@@ -666,40 +669,99 @@ gst_h265_parse_process_sei (GstH265Parse * h265parse, GstH265NalUnit * nalu)
 
         break;
       }
-      case GST_H265_SEI_ANNOTATED_REGION:
+      
+      case GST_H265_SEI_ANNOTATED_REGIONS:
       {
-        //memcpy (&h265parse->annotated_region, &sei.payload.annotated_region,
-            //sizeof (GstH265AnnotatedRegion));
-        h265parse->annotated_region = sei.payload.annotated_region;
-        /*
-        GstVideoRegionOfInterestMeta *roi;
-        guint obj_num;
-        guint i;
+        guint j,idx;
+        GstAnnotatedRegions *dst_ar = &h265parse->annotated_regions_info;
+        const GstH265AnnotatedRegions *const src_ar = &sei.payload.annotated_regions;
+        //General flags
+        dst_ar->object_label_present_flag = src_ar->object_label_present_flag;
+        dst_ar->object_conf_info_present_flag = src_ar->object_conf_info_present_flag;
 
-        obj_num = sei.payload.annotated_region.ar_num_object_updates;
-
-        // object update 
-        /*
-        for (i=0; i < obj_num; i++)
-        {
-          roi.id = sei.payload.annotated_region.ar_object_idx[i];
-          roi.roi_type = g_quark_from_string (sei.payload.annotated_region.
-          ar_label[ar->ar_object_label_idx[ar->ar_object_idx[i]]]);
-
-          roi.x = sei.payload.annotated_region.ar_bounding_box_left[roi.id];
-          roi.y = sei.payload.annotated_region.ar_bounding_box_top[roi.id];
-          roi.w = sei.payload.annotated_region.ar_bounding_box_width[roi.id];
-          roi.h = sei.payload.annotated_region.ar_bounding_box_height[roi.id];
+        //Label updates
+        if (dst_ar->object_label_present_flag) {
+          for (j = 0; j < src_ar->num_label_updates; j++) {
+            idx = src_ar->labels[j].label_idx;
+            if (src_ar->labels[j].label_cancel_flag) {
+              strcpy(dst_ar->labels[idx].label, "Unknown");
+              dst_ar->labels[idx].label_valid = 0;
+              dst_ar->num_valid_labels -= 1;
+            }
+            else {
+              strcpy(dst_ar->labels[idx].label, src_ar->labels[j].label);
+              dst_ar->labels[idx].label_valid = 1;
+              dst_ar->num_valid_labels += 1;
+            }
+          }
         }
-        */
+        //Object updates
+        for (j = 0; j < src_ar->num_object_updates;j++) {
+          idx = src_ar->objects[j].object_idx;
+          //Cancelled object
+          if (src_ar->objects[j].object_cancel_flag) {
+            dst_ar->objects[idx].object_valid = 0;
+            dst_ar->num_valid_objects -= 1;
+          }
+          //Valid object
+          else {
+            //Update the bounding box
+            if (src_ar->objects[j].bounding_box_update_flag) {
+              //Valid bounding box
+              if (!src_ar->objects[j].bounding_box_cancel_flag) {
+                //New object (or) existing one
+                if (!dst_ar->objects[idx].object_valid) {
+                  dst_ar->objects[idx].object_valid = 1;
+                  dst_ar->num_valid_objects += 1;
+                }
+                dst_ar->objects[idx].top = (guint)src_ar->objects[j].bounding_box_top;
+                dst_ar->objects[idx].left = (guint)src_ar->objects[j].bounding_box_left;
+                dst_ar->objects[idx].width = (guint)src_ar->objects[j].bounding_box_width;
+                dst_ar->objects[idx].height = (guint)src_ar->objects[j].bounding_box_height;
+                //Object label related
+                if (dst_ar->object_label_present_flag && 
+                  src_ar->objects[j].object_label_update_flag) {
+                  dst_ar->objects[idx].label_idx = src_ar->objects[j].object_label_idx;
+                }
+                //Object confidence related
+                if (dst_ar->object_conf_info_present_flag) {
+                  dst_ar->objects[idx].confidence = src_ar->objects[j].object_confidence;
+                }
+              }
+              //Cancelled bounding box
+              else {
+                  dst_ar->objects[idx].top = 0;
+                  dst_ar->objects[idx].left = 0;
+                  dst_ar->objects[idx].width = 0;
+                  dst_ar->objects[idx].height = 0;
+              }
+            }
+          }
+        }
+
+#if 1
+        printf("***********************************************************\n");
+        for (j = 0; j < dst_ar->num_valid_objects; j++)
+        {
+          if (dst_ar->object_label_present_flag)
+            printf("BB Label: %s\n", dst_ar->labels[dst_ar->objects[j].label_idx].label);
+
+          printf("BB Top: %d\n", dst_ar->objects[j].top);
+          printf("BB Left: %d\n", dst_ar->objects[j].left);
+          printf("BB Width: %d\n", dst_ar->objects[j].width);
+          printf("BB Height: %d\n", dst_ar->objects[j].height);
+     
+          if (dst_ar->object_conf_info_present_flag)
+            printf("BB Conf: %d\n", dst_ar->objects[j].confidence);
+          printf("\n");
+        }
+        printf("***********************************************************\n");
+#endif
        break;
       }
 
       default:
-      {
-        //GST_ERROR("TYPE IS 202, NOT FOUND....");
         break;
-      }
     }
   }
   g_array_free (messages, TRUE);
@@ -789,7 +851,7 @@ gst_h265_parse_process_nal (GstH265Parse * h265parse, GstH265NalUnit * nalu)
       break;
     case GST_H265_NAL_SPS:
       /* reset state, everything else is obsolete */
-      h265parse->state = 0;
+      h265parse->state &= GST_H265_PARSE_STATE_GOT_PPS;
 
       pres = gst_h265_parser_parse_sps (nalparser, nalu, &sps, TRUE);
 
@@ -1068,7 +1130,7 @@ gst_h265_parse_handle_frame_packetized (GstBaseParse * parse,
   const guint nl = h265parse->nal_length_size;
   GstMapInfo map;
   gint left;
-  GST_ERROR("Length of NAL: %d", nl);
+
   if (nl < 1 || nl > 4) {
     GST_DEBUG_OBJECT (h265parse, "insufficient data to split input");
     return GST_FLOW_NOT_NEGOTIATED;
@@ -1181,7 +1243,7 @@ gst_h265_parse_handle_frame (GstBaseParse * parse,
   /* delegate in packetized case, no skipping should be needed */
   if (h265parse->packetized)
     return gst_h265_parse_handle_frame_packetized (parse, frame);
-
+  
   gst_buffer_map (buffer, &map, GST_MAP_READ);
   data = map.data;
   size = map.size;
@@ -1392,7 +1454,7 @@ gst_h265_parse_handle_frame (GstBaseParse * parse,
 
 end:
   framesize = nalu.offset + nalu.size;
-
+ 
   gst_buffer_unmap (buffer, &map);
 
   gst_h265_parse_parse_frame (parse, frame);
@@ -2706,7 +2768,7 @@ gst_h265_parse_handle_vps_sps_pps_nals (GstH265Parse * h265parse,
 
 static GstFlowReturn
 gst_h265_parse_pre_push_frame (GstBaseParse * parse, GstBaseParseFrame * frame)
-{
+{ 
   GstH265Parse *h265parse;
   GstBuffer *buffer;
   GstEvent *event;
@@ -2843,10 +2905,9 @@ gst_h265_parse_pre_push_frame (GstBaseParse * parse, GstBaseParseFrame * frame)
     default:
       break;
   }
-
+  
   {
     guint i = 0;
-
     for (i = 0; i < h265parse->time_code.num_clock_ts; i++) {
       gint field_count = -1;
       guint n_frames;
@@ -2918,7 +2979,29 @@ gst_h265_parse_pre_push_frame (GstBaseParse * parse, GstBaseParseFrame * frame)
           seconds_value[i] : 0, n_frames, field_count);
     }
   }
+  /* Add  annotated region sei as ROI meta to the buffer */
+  guint num_objects = h265parse->annotated_regions_info.num_valid_objects;
+  if (num_objects > 0)
+  {
+    GstVideoRegionOfInterestMeta *dmeta;
+    guint i;
+    for (i = 0; i < num_objects; i++)
+    { 
+      guint label_index = h265parse->annotated_regions_info.objects[i].label_idx;
+      dmeta = gst_buffer_add_video_region_of_interest_meta_id (parse_buffer, 
+        g_quark_from_string(h265parse->annotated_regions_info.labels[label_index].label),
+        h265parse->annotated_regions_info.objects[i].left, h265parse->annotated_regions_info.objects[i].top,
+        h265parse->annotated_regions_info.objects[i].width, h265parse->annotated_regions_info.objects[i].height);
 
+      dmeta->id = i;
+      dmeta->parent_id = i;    
+    }
+  #if 1
+      gint num_meta = gst_buffer_get_n_meta(parse_buffer, GST_VIDEO_REGION_OF_INTEREST_META_API_TYPE);
+      printf ("Add number of annotated meta => %d\n", num_meta); 
+  #endif
+  }
+  
   gst_video_push_user_data ((GstElement *) h265parse, &h265parse->user_data,
       parse_buffer);
 

@@ -1090,6 +1090,7 @@ gst_h265_parser_parse_pic_timing (GstH265Parser * parser,
   guint i;
 
   GST_DEBUG ("parsing \"Picture timing\"");
+  GST_ERROR ("Parsing pic timing...");
   if (!parser->last_sps || !parser->last_sps->valid) {
     GST_WARNING ("didn't get the associated sequence parameter set for the "
         "current access unit");
@@ -1342,129 +1343,119 @@ error:
 }
 
 static GstH265ParserResult
-gst_h265_parser_parse_annotated_region(GstH265Parser * parser,
-    GstH265AnnotatedRegion * ar, NalReader * nr)
+gst_h265_parser_parse_annotated_regions (GstH265Parser * parser,
+    GstH265AnnotatedRegions * ar, NalReader * nr)
 {
-  guint i;
+  guint i, j;
+  guint val;
+  guint8 reserved_zero_bit;
+  guint8 num_bits_left;
   
-  GST_DEBUG ("parsing \"Annotated region\"");
+  GST_DEBUG ("parsing \"Annotated regions\"");
 
-  READ_UINT8 (nr, ar->ar_cancel_flag, 1);
-
-  if (!ar->ar_cancel_flag)
+  READ_UINT8 (nr, ar->cancel_flag, 1);
+  if (!ar->cancel_flag)
   {
-    READ_UINT8 (nr, ar->ar_not_optimized_for_viewing_flag, 1);
-    READ_UINT8 (nr, ar->ar_true_motion_flag, 1);
-    READ_UINT8 (nr, ar->ar_occluded_object_flag, 1);
-    READ_UINT8 (nr, ar->ar_partial_object_flag_present_flag, 1);
-    READ_UINT8 (nr, ar->ar_object_label_present_flag, 1);
-    READ_UINT8 (nr, ar->ar_object_confidence_info_present_flag, 1);
-
-    if (ar->ar_object_confidence_info_present_flag)
-      READ_UINT8 (nr, ar->ar_object_confidence_length_minus1, 4);
-
-    if (ar->ar_object_label_present_flag)
+    READ_UINT8 (nr, ar->not_optimized_for_viewing_flag, 1);
+    READ_UINT8 (nr, ar->true_motion_flag, 1);
+    READ_UINT8 (nr, ar->occluded_object_flag, 1);
+    READ_UINT8 (nr, ar->partial_object_flag_present_flag, 1);
+    READ_UINT8 (nr, ar->object_label_present_flag, 1);
+    READ_UINT8 (nr, ar->object_conf_info_present_flag, 1);
+    if (ar->object_conf_info_present_flag)
     {
-      READ_UINT8 (nr, ar->ar_object_label_language_present_flag, 1);
-      if (ar->ar_object_label_language_present_flag)
-      {
-        while (!nal_reader_is_byte_aligned (nr))
-          READ_UINT8 (nr, ar->ar_bit_equal_to_zero, 1);
-          
-        /* read ar_object_label_language*/
-        READ_ST (nr, ar->ar_object_label_language);
-        // GST_ERROR ("Label language is %s", &ar->ar_object_label_language);
-      }
-
-      READ_UE (nr, ar->ar_num_label_updates);
-
-      for (i=0; i < ar->ar_num_label_updates; i++)
-      {
-        READ_UE (nr, ar->ar_label_idx[i]);
-        READ_UINT8 (nr, ar->ar_label_cancel_flag, 1);
-
-        if (!ar->ar_label_cancel_flag)
-        {
-          while (!nal_reader_is_byte_aligned (nr))
-            READ_UINT8 (nr, ar->ar_bit_equal_to_zero, 1);
-
-          /* read the ar_label */
-          READ_ST (nr, ar->ar_label[ar->ar_label_idx[i]]);
-        }
-      }
-    } 
-
-    READ_UE (nr, ar->ar_num_object_updates);
-
-    /* for debug info display */
-    if (ar->ar_num_object_updates > 0)
-    {
-      GST_ERROR ("THE number of updated labels ==> %d", ar->ar_num_label_updates);
-      GST_ERROR ("THE number Of updated objects ==> %d", ar->ar_num_object_updates);
+      READ_UINT32 (nr, ar->object_conf_length, 4);
+      ar->object_conf_length += 1; 
     }
-    /* ************************************ */
-
-    for (i=0; i < ar->ar_num_object_updates; i++)
-    { 
-      READ_UE (nr, ar->ar_object_idx[i]);
-      READ_UINT8 (nr, ar->ar_object_cancel_flag, 1);
-      if (ar->ar_num_object_updates > 0)
+    if (ar->object_label_present_flag)
+    {
+      READ_UINT8(nr, ar->object_label_lang_present_flag, 1);
+    
+      if (ar->object_label_lang_present_flag)
       {
-        GST_ERROR ("THE %d updated object_idx ==> %d, cancel flag ==> %d", i, 
-        ar->ar_object_idx[i], ar->ar_object_cancel_flag);
-      }
-   
-      if (!ar->ar_object_cancel_flag)
-      {
-        if (ar->ar_object_label_present_flag)
+        num_bits_left = nr->bits_in_cache;
+        
+        //Byte alignment
+        for (i = 0; i < num_bits_left; i++)
+          READ_UINT8(nr, reserved_zero_bit, 1);
+        
+        j = 0;
+        do
         {
-          READ_UINT8 (nr, ar->ar_object_label_update_flag, 1);
-          // GST_ERROR ("label_update flag: %d",  ar->ar_object_label_update_flag);
-          if (ar->ar_object_label_update_flag)
-            READ_UE (nr, ar->ar_object_label_idx[ar->ar_object_idx[i]]);
-        }
-
-        READ_UINT8 (nr, ar->ar_bounding_box_update_flag, 1);
-        // GST_ERROR ("bbox_update flag: %d", ar->ar_bounding_box_update_flag);
-        if (ar->ar_bounding_box_update_flag)
-        {
-          READ_UINT8 (nr, ar->ar_bounding_box_cancel_flag, 1);
-          // GST_ERROR ("bbox cancel flag: %d", ar->ar_bounding_box_cancel_flag);
-          if (!ar->ar_bounding_box_cancel_flag)
-          {   
-
-            READ_UINT16 (nr, ar->ar_bounding_box_top[ar->ar_object_idx[i]], 16);
-            READ_UINT16 (nr, ar->ar_bounding_box_left[ar->ar_object_idx[i]], 16);
-            READ_UINT16 (nr, ar->ar_bounding_box_width[ar->ar_object_idx[i]], 16);
-            READ_UINT16 (nr, ar->ar_bounding_box_height[ar->ar_object_idx[i]], 16);
-
-            /* debug info display using GST_ERROR */
-            if (ar->ar_num_object_updates > 0)
-            {
-              GST_ERROR ("BBOX %d ==> top:%d, left:%d, width:%d, height:%d", i, ar->ar_bounding_box_top[ar->ar_object_idx[i]],
-              ar->ar_bounding_box_left[ar->ar_object_idx[i]], ar->ar_bounding_box_width[ar->ar_object_idx[i]],
-              ar->ar_bounding_box_height[ar->ar_object_idx[i]]); 
-              //GST_ERROR ("Partial present flag is %d, Confidence present flag is %d",
-              //ar->ar_partial_object_flag_present_flag,ar->ar_object_confidence_info_present_flag);
-            }
-            /* ************************************ */ 
-            
-            if (ar->ar_partial_object_flag_present_flag)
-              READ_UINT8 (nr, ar->ar_partial_object_flag[ar->ar_object_idx[i]], 1);
-
-            if (ar->ar_object_confidence_info_present_flag)
-              READ_UINT8 (nr, ar->ar_object_confidence[ar->ar_object_idx[i]], 
-              ar->ar_object_confidence_length_minus1+1);
+          READ_UINT32(nr, val, 8);
+          if (val)
+          {
+            ar->object_label_lang[j++] = (gchar)val;
           }
+        } while (val != '\0');
+      }
+      READ_UE (nr, ar->num_label_updates);
+      for (i = 0; i < ar->num_label_updates; i++)
+      {
+        READ_UE (nr, ar->labels[i].label_idx);
+        READ_UINT8(nr, ar->labels[i].label_cancel_flag, 1);
+        if (!ar->labels[i].label_cancel_flag)
+        {
+          num_bits_left = nr->bits_in_cache;
+          //Byte alignment
+          for (j = 0; j < num_bits_left; j++)
+            READ_UINT8(nr, reserved_zero_bit, 1);
+    
+          j = 0;
+          do
+          {
+            READ_UINT32(nr, val, 8);
+            if (val)
+            {
+              ar->labels[i].label[j++] = (gchar) val;
+            }
+          } while (val != '\0');
         }
       }
     }
-
+    
+    READ_UE (nr, ar->num_object_updates);
+    for (i = 0; i < ar->num_object_updates; i++)
+    {
+      READ_UE (nr, ar->objects[i].object_idx);
+      READ_UINT8 (nr, ar->objects[i].object_cancel_flag, 1);
+      if (!ar->objects[i].object_cancel_flag)
+      {
+        if (ar->object_label_present_flag)
+        {
+          READ_UINT8 (nr, ar->objects[i].object_label_update_flag, 1);
+          if (ar->objects[i].object_label_update_flag)
+          {
+            READ_UE (nr, ar->objects[i].object_label_idx);  
+          }     
+        }
+        READ_UINT8 (nr, ar->objects[i].bounding_box_update_flag, 1);
+        if (ar->objects[i].bounding_box_update_flag)
+        {
+          READ_UINT8 (nr, ar->objects[i].bounding_box_cancel_flag, 1);
+          if (!ar->objects[i].bounding_box_cancel_flag)
+          {
+            READ_UINT16 (nr, ar->objects[i].bounding_box_top,    16);
+            READ_UINT16 (nr, ar->objects[i].bounding_box_left,   16);
+            READ_UINT16 (nr, ar->objects[i].bounding_box_width,  16);
+            READ_UINT16 (nr, ar->objects[i].bounding_box_height, 16);
+            if (ar->partial_object_flag_present_flag)
+            {
+              READ_UINT8 (nr, ar->objects[i].partial_object_flag, 1);
+            }
+            if (ar->object_conf_info_present_flag)
+            {
+              READ_UINT8 (nr, ar->objects[i].object_confidence, ar->object_conf_length);
+            }
+        }
+       }
+      }
+    }
   }
   return GST_H265_PARSER_OK;
 
 error:
-  GST_WARNING("error parsing \"Anotated region\"");
+  GST_WARNING ("error parsing \"Annotated regions\"");
   return GST_H265_PARSER_ERROR;
 }
 
@@ -2871,6 +2862,7 @@ gst_h265_parser_parse_sei_message (GstH265Parser * parser,
     sei->payloadType += payload_type_byte;
   } while (payload_type_byte == 0xff);
   payloadSize = 0;
+
   do {
     READ_UINT8 (nr, payload_size_byte, 8);
     payloadSize += payload_size_byte;
@@ -2879,7 +2871,7 @@ gst_h265_parser_parse_sei_message (GstH265Parser * parser,
 
   remaining = nal_reader_get_remaining (nr);
   payload_size = payloadSize * 8 < remaining ? payloadSize * 8 : remaining;
-
+  
   payload_start_pos_bit = nal_reader_get_pos (nr);
   GST_DEBUG
       ("SEI message received: payloadType  %u, payloadSize = %u bits",
@@ -2918,10 +2910,12 @@ gst_h265_parser_parse_sei_message (GstH265Parser * parser,
             &sei->payload.content_light_level, nr);
         break;
       
-      case GST_H265_SEI_ANNOTATED_REGION:
-        res = gst_h265_parser_parse_annotated_region(parser,
-            &sei->payload.annotated_region, nr);
+      case GST_H265_SEI_ANNOTATED_REGIONS:
+        res = gst_h265_parser_parse_annotated_regions(parser,
+            &sei->payload.annotated_regions, nr);
         break;
+        
+        
       
       default:
         /* Just consume payloadSize bytes, which does not account for
@@ -3116,9 +3110,9 @@ gst_h265_parser_parse_sei (GstH265Parser * nalparser, GstH265NalUnit * nalu,
   NalReader nr;
   GstH265SEIMessage sei;
   GstH265ParserResult res;
-  //frame_no++ ;
 
   GST_DEBUG ("parsing SEI nal");
+   
   nal_reader_init (&nr, nalu->data + nalu->offset + nalu->header_bytes,
       nalu->size - nalu->header_bytes);
   *messages = g_array_new (FALSE, FALSE, sizeof (GstH265SEIMessage));

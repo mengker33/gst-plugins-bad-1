@@ -357,7 +357,7 @@ typedef enum
   GST_H265_SEI_TIME_CODE = 136,
   GST_H265_SEI_MASTERING_DISPLAY_COLOUR_VOLUME = 137,
   GST_H265_SEI_CONTENT_LIGHT_LEVEL = 144,
-  GST_H265_SEI_ANNOTATED_REGION =202,
+  GST_H265_SEI_ANNOTATED_REGIONS =202,
       /* and more...  */
 } GstH265SEIPayloadType;
 
@@ -453,7 +453,10 @@ typedef struct _GstH265TimeCode                 GstH265TimeCode;
 typedef struct _GstH265MasteringDisplayColourVolume GstH265MasteringDisplayColourVolume;
 typedef struct _GstH265ContentLightLevel        GstH265ContentLightLevel;
 typedef struct _GstH265SEIMessage               GstH265SEIMessage;
-typedef struct _GstH265AnnotatedRegion          GstH265AnnotatedRegion;
+// typedef struct _GstH265AnnotatedRegions          GstH265AnnotatedRegions;
+typedef struct _GstH265AnnotatedRegionsObjects  GstH265AnnotatedRegionsObjects;
+typedef struct _GstH265AnnotatedRegionsLabels   GstH265AnnotatedRegionsLabels;
+typedef struct _GstH265AnnotatedRegions         GstH265AnnotatedRegions;
 
 /**
  * GstH265NalUnit:
@@ -1597,44 +1600,42 @@ struct _GstH265ContentLightLevel
   guint16 max_pic_average_light_level;
 };
 
-struct _GstH265AnnotatedRegion
-{
-  guint8 ar_cancel_flag;
-  guint8 ar_not_optimized_for_viewing_flag;
-  guint8 ar_true_motion_flag;
-  guint8 ar_occluded_object_flag;
-  guint8 ar_partial_object_flag_present_flag;
-  guint8 ar_object_label_present_flag;
-  guint8 ar_object_confidence_info_present_flag;
-  guint8 ar_object_confidence_length_minus1;
-  guint8 ar_object_label_language_present_flag;
-  guint8 ar_bit_equal_to_zero;
+struct _GstH265AnnotatedRegionsObjects {
+	guint   object_idx;
+	guint   object_label_idx;
+	guint   object_confidence;
+	guint8  object_cancel_flag;
+	guint8  object_label_update_flag;
+	guint8  bounding_box_cancel_flag;
+	guint8  bounding_box_update_flag;
+	guint8  partial_object_flag;
+	guint16 bounding_box_top;
+	guint16 bounding_box_left;
+	guint16 bounding_box_width;
+	guint16 bounding_box_height;	 
+};
 
-  gchar *ar_object_label_language;
+struct _GstH265AnnotatedRegionsLabels {
+	guint label_idx;
+	guint8 label_cancel_flag;
+	gchar  label[250];
+};
 
-  guint8 ar_num_label_updates;
-  guint8 ar_label_idx[256];
-
-  guint8 ar_label_cancel_flag;
-
-  gchar *ar_label[256];
-
-  guint8 ar_num_object_updates;
-  guint8 ar_object_idx[256];
-
-  guint8 ar_object_cancel_flag;
-  guint8 ar_object_label_update_flag;
-  guint8 ar_object_label_idx[256];
-
-  guint8 ar_bounding_box_update_flag;
-  guint8 ar_bounding_box_cancel_flag;
-
-  guint16 ar_bounding_box_top[256];
-  guint16 ar_bounding_box_left[256];
-  guint16 ar_bounding_box_width[256];
-  guint16 ar_bounding_box_height[256];
-  guint8 ar_partial_object_flag[256];
-  guint8 ar_object_confidence[256];
+struct _GstH265AnnotatedRegions {
+  guint8 cancel_flag;
+	guint8 not_optimized_for_viewing_flag;
+	guint8 true_motion_flag;
+	guint8 occluded_object_flag;
+	guint8 partial_object_flag_present_flag;
+	guint8 object_label_present_flag;
+	guint8 object_conf_info_present_flag;
+	guint8 object_label_lang_present_flag;
+	gchar object_label_lang[250];
+	guint object_conf_length;
+	guint num_label_updates;
+	guint num_object_updates;
+	GstH265AnnotatedRegionsLabels labels[250];
+	GstH265AnnotatedRegionsObjects objects[250]; 
 };
 
 struct _GstH265SEIMessage
@@ -1649,7 +1650,7 @@ struct _GstH265SEIMessage
     GstH265TimeCode time_code;
     GstH265MasteringDisplayColourVolume mastering_display_colour_volume;
     GstH265ContentLightLevel content_light_level;
-    GstH265AnnotatedRegion annotated_region;
+    GstH265AnnotatedRegions annotated_regions;
     /* ... could implement more */
   } payload;
 };

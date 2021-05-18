@@ -45,6 +45,35 @@ GType gst_h265_parse_get_type (void);
 typedef struct _GstH265Parse GstH265Parse;
 typedef struct _GstH265ParseClass GstH265ParseClass;
 
+typedef struct _GstAnnotatedObjects
+{
+  guint8 object_valid;
+  guint top;
+  guint left;
+  guint width;
+  guint height;
+  guint confidence;
+  guint label_idx;
+} GstAnnotatedObjects;
+
+typedef struct _GstAnnotatedLabels
+{
+  guint8 label_valid;
+  gint8  label[250];
+}  GstAnnotatedLabels;
+
+typedef struct _GstAnnotatedRegions
+{
+  guint8 occluded_object_flag;
+  guint8 partial_object_flag_present_flag;
+  guint8 object_label_present_flag;
+  guint8 object_conf_info_present_flag;
+  guint num_valid_objects;
+  guint num_valid_labels;
+  GstAnnotatedObjects objects[50];
+  GstAnnotatedLabels  labels[50];
+} GstAnnotatedRegions;
+
 struct _GstH265Parse
 {
   GstBaseParse baseparse;
@@ -127,6 +156,8 @@ struct _GstH265Parse
 
   GstVideoContentLightLevel content_light_level;
   guint content_light_level_state;
+
+  GstAnnotatedRegions annotated_regions_info;
 
   /* For forward predicted trickmode */
   gboolean discard_bidirectional;
