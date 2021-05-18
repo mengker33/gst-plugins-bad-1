@@ -1107,7 +1107,7 @@ gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
    * Instead of copying the input data into the mfxBitstream, let's
    * keep an extra reference to frame-codec's input buffer */
   input_buffer = gst_buffer_ref (frame->input_buffer);
-  GST_ERROR ("*********** Decoding frame %d ***********", frame->decode_frame_number);
+  printf ("*********** Decoding frame %d ***********", frame->decode_frame_number);
 
   if (!gst_buffer_map (input_buffer, &map_info, GST_MAP_READ)) {
     gst_buffer_unref (input_buffer);
@@ -1260,7 +1260,7 @@ gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
       payload_status = MFXVideoDECODE_GetPayload(session, &ts, &payload);
       if (payload.NumBit > 0)
         payload_size = payload.NumBit;
-      GST_ERROR ("GetPayload NumBits => %d, type => %d", payload.NumBit, payload.Type);
+      printf ("GetPayload NumBits => %d, type => %d", payload.NumBit, payload.Type);
     }
 
     /*add trailing byte at the end of data buffer which is necessary for parsing */
@@ -1354,7 +1354,7 @@ gst_msdkdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
   }
  
   parse_payload (&payload, payload_size);
-  GST_ERROR ("--------------------------------------------------");
+  printf ("--------------------------------------------------");
   
   if (!gst_video_decoder_get_packetized (decoder)) {
     /* flush out the data which has already been consumed by msdk */
